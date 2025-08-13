@@ -8,13 +8,16 @@ declare var XLSX: any;
 // --- Interfaces for our data structures ---
 interface ExtractedInfo {
     productName: string | null;
+    brand: string | null;
     refNumber: string | null;
     lotNumber: string | null;
+    manufacturingDate: string | null;
     expirationDate: string | null;
 }
 
 interface ResultItem {
     id: string;
+    displayId: number;
     imageSrc: string;
     file: File;
     fileName: string;
@@ -46,12 +49,15 @@ const extractionSchema = {
     type: Type.OBJECT,
     properties: {
         productName: { type: Type.STRING, description: "O nome principal do produto/sistema." },
+        brand: { type: Type.STRING, description: "A marca ou fabricante do produto, se visível." },
         refNumber: { type: Type.STRING, description: "O número de referência, geralmente rotulado como 'REF'." },
         lotNumber: { type: Type.STRING, description: "O número do lote, geralmente rotulado como 'LOT'." },
+        manufacturingDate: { type: Type.STRING, description: "A data de fabricação, geralmente próxima a um símbolo de fábrica. Formate como AAAA-MM-DD, se possível." },
         expirationDate: { type: Type.STRING, description: "A data de validade, geralmente próxima a um símbolo de ampulheta. Formate como AAAA-MM-DD, se possível." },
     },
     required: ["productName", "refNumber", "lotNumber", "expirationDate"],
 };
+
 
 const MAX_CONCURRENT_UPLOADS = 2;
 const PAUSE_AFTER_REQUESTS = 8;
@@ -158,8 +164,10 @@ const App: React.FC = () => {
         if (!files || files.length === 0) return;
         
         setIsProcessing(true);
-        const newItems: ResultItem[] = Array.from(files).map(file => ({
+        const currentCount = results.length;
+        const newItems: ResultItem[] = Array.from(files).map((file, index) => ({
             id: self.crypto.randomUUID(),
+            displayId: currentCount + index + 1,
             imageSrc: URL.createObjectURL(file),
             fileName: file.name,
             file,
@@ -173,10 +181,13 @@ const App: React.FC = () => {
         const dataToExport = results
             .filter(r => r.status === 'done' && r.data)
             .map(r => ({
+                '#': r.displayId,
                 'Nome do Arquivo': r.fileName,
                 'Nome do Produto': r.data!.productName,
+                'Marca': r.data!.brand,
                 'Referência (REF)': r.data!.refNumber,
                 'Número do Lote (LOT)': r.data!.lotNumber,
+                'Data de Fabricação': r.data!.manufacturingDate,
                 'Data de Validade': r.data!.expirationDate,
             }));
 
@@ -262,54 +273,62 @@ const App: React.FC = () => {
 
                 <section className="results-container">
                     {results.length > 0 ? (
-                        <table className="results-table">
-                            <thead>
-                                <tr>
-                                    <th>Imagem</th>
-                                    <th>Nome do Produto</th>
-                                    <th>REF #</th>
-                                    <th>LOTE #</th>
-                                    <th>Validade</th>
-                                    <th>Ações</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {results.map(item => (
-                                    <tr key={item.id}>
-                                        <td>
-                                            <button className="thumbnail-button" onClick={() => setFullscreenImage(item.imageSrc)}>
-                                                <img src={item.imageSrc} alt={item.fileName} className="image-thumbnail" />
-                                            </button>
-                                        </td>
-                                        {item.status === 'queued' && <td colSpan={5}><div className="status-cell"><p className="queued-text">Na fila para processamento...</p></div></td>}
-                                        {item.status === 'loading' && <td colSpan={5}><div className="status-cell"><div className="spinner"></div><p>Processando...</p></div></td>}
-                                        {item.status === 'error' && (
-                                            <>
-                                                <td colSpan={4}><div className="status-cell error-cell"><p className="error-text">Falha na extração: {item.errorMessage}</p></div></td>
-                                                <td>
-                                                    <button onClick={() => handleDeleteItem(item.id)} className="btn-delete" title="Excluir item">
-                                                        &#128465;
-                                                    </button>
-                                                </td>
-                                            </>
-                                        )}
-                                        {item.status === 'done' && item.data && (
-                                            <>
-                                                <td>{item.data.productName || 'N/D'}</td>
-                                                <td>{item.data.refNumber || 'N/D'}</td>
-                                                <td>{item.data.lotNumber || 'N/D'}</td>
-                                                <td>{item.data.expirationDate || 'N/D'}</td>
-                                                <td>
-                                                    <button onClick={() => handleDeleteItem(item.id)} className="btn-delete" title="Excluir item">
-                                                        &#128465;
-                                                    </button>
-                                                </td>
-                                            </>
-                                        )}
+                        <div className="table-wrapper">
+                            <table className="results-table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Imagem</th>
+                                        <th>Nome do Produto</th>
+                                        <th>Marca</th>
+                                        <th>REF #</th>
+                                        <th>LOTE #</th>
+                                        <th>Fabricação</th>
+                                        <th>Validade</th>
+                                        <th>Ações</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    {results.map(item => (
+                                        <tr key={item.id}>
+                                            <td>{item.displayId}</td>
+                                            <td>
+                                                <button className="thumbnail-button" onClick={() => setFullscreenImage(item.imageSrc)}>
+                                                    <img src={item.imageSrc} alt={item.fileName} className="image-thumbnail" />
+                                                </button>
+                                            </td>
+                                            {item.status === 'queued' && <td colSpan={7}><div className="status-cell"><p className="queued-text">Na fila para processamento...</p></div></td>}
+                                            {item.status === 'loading' && <td colSpan={7}><div className="status-cell"><div className="spinner"></div><p>Processando...</p></div></td>}
+                                            {item.status === 'error' && (
+                                                <>
+                                                    <td colSpan={6}><div className="status-cell error-cell"><p className="error-text">Falha na extração: {item.errorMessage}</p></div></td>
+                                                    <td>
+                                                        <button onClick={() => handleDeleteItem(item.id)} className="btn-delete" title="Excluir item">
+                                                            &#128465;
+                                                        </button>
+                                                    </td>
+                                                </>
+                                            )}
+                                            {item.status === 'done' && item.data && (
+                                                <>
+                                                    <td>{item.data.productName || 'N/D'}</td>
+                                                    <td>{item.data.brand || 'N/D'}</td>
+                                                    <td>{item.data.refNumber || 'N/D'}</td>
+                                                    <td>{item.data.lotNumber || 'N/D'}</td>
+                                                    <td>{item.data.manufacturingDate || 'N/D'}</td>
+                                                    <td>{item.data.expirationDate || 'N/D'}</td>
+                                                    <td>
+                                                        <button onClick={() => handleDeleteItem(item.id)} className="btn-delete" title="Excluir item">
+                                                            &#128465;
+                                                        </button>
+                                                    </td>
+                                                </>
+                                            )}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     ) : (
                         <div className="no-results">
                             <p>Suas imagens processadas aparecerão aqui.</p>

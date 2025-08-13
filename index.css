@@ -148,6 +148,11 @@ body {
     margin-top: 2rem;
 }
 
+.table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 .results-table {
     width: 100%;
     border-collapse: collapse;
@@ -158,6 +163,12 @@ body {
     border-bottom: 1px solid var(--medium-gray);
     vertical-align: middle;
     text-align: left;
+    white-space: nowrap;
+}
+
+.results-table td:nth-child(3), /* Nome do Produto */
+.error-cell {
+    white-space: normal;
 }
 
 .results-table th {
@@ -168,8 +179,10 @@ body {
     background-color: var(--light-gray);
 }
 
-.results-table th:first-child,
-.results-table td:first-child,
+.results-table th:nth-child(1),
+.results-table td:nth-child(1),
+.results-table th:nth-child(2),
+.results-table td:nth-child(2),
 .results-table th:last-child,
 .results-table td:last-child {
     text-align: center;
