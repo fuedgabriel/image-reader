@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -27,8 +27,8 @@ interface ResultItem {
 const ImageModal: React.FC<{ src: string, onClose: () => void }> = ({ src, onClose }) => (
     <div className="modal-overlay" onClick={onClose}>
         <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <img src={src} alt="Fullscreen view" className="modal-image" />
-            <button onClick={onClose} className="modal-close-button" aria-label="Close image view">&times;</button>
+            <img src={src} alt="Visualização em tela cheia" className="modal-image" />
+            <button onClick={onClose} className="modal-close-button" aria-label="Fechar visualização da imagem">&times;</button>
         </div>
     </div>
 );
@@ -45,15 +45,17 @@ const model = 'gemini-2.5-flash';
 const extractionSchema = {
     type: Type.OBJECT,
     properties: {
-        productName: { type: Type.STRING, description: "The main name of the product/system." },
-        refNumber: { type: Type.STRING, description: "The reference number, often labeled 'REF'." },
-        lotNumber: { type: Type.STRING, description: "The lot number, often labeled 'LOT'." },
-        expirationDate: { type: Type.STRING, description: "The expiration date, often near an hourglass symbol. Format as YYYY-MM-DD if possible." },
+        productName: { type: Type.STRING, description: "O nome principal do produto/sistema." },
+        refNumber: { type: Type.STRING, description: "O número de referência, geralmente rotulado como 'REF'." },
+        lotNumber: { type: Type.STRING, description: "O número do lote, geralmente rotulado como 'LOT'." },
+        expirationDate: { type: Type.STRING, description: "A data de validade, geralmente próxima a um símbolo de ampulheta. Formate como AAAA-MM-DD, se possível." },
     },
     required: ["productName", "refNumber", "lotNumber", "expirationDate"],
 };
 
 const MAX_CONCURRENT_UPLOADS = 2;
+const PAUSE_AFTER_REQUESTS = 8;
+const PAUSE_DURATION_SECONDS = 70; // 1 minuto e 10 segundos
 
 // --- Helper Functions ---
 const fileToBase64 = (file: File): Promise<string> => {
@@ -71,16 +73,20 @@ const App: React.FC = () => {
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
     const [isDragging, setIsDragging] = useState<boolean>(false);
     const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
+    const [isPaused, setIsPaused] = useState(false);
+    const [pauseCountdown, setPauseCountdown] = useState(0);
+    const requestCountRef = useRef(0);
 
     const extractTextFromImage = async (itemToProcess: ResultItem) => {
         try {
             const { file, id } = itemToProcess;
             const base64Data = await fileToBase64(file);
+            const promptText = "Extraia as informações principais desta imagem de uma caixa de suprimentos de laboratório. Se um valor não for encontrado, retorne nulo.";
             const response = await ai.models.generateContent({
                 model: model,
                 contents: [{
                     parts: [
-                        { text: "Extract the key information from this image of a laboratory supply box. If a value is not found, return null." },
+                        { text: promptText },
                         { inlineData: { mimeType: file.type, data: base64Data } }
                     ]
                 }],
@@ -93,14 +99,37 @@ const App: React.FC = () => {
             const extractedData = JSON.parse(response.text) as ExtractedInfo;
             setResults(prev => prev.map(r => r.id === id ? { ...r, status: 'done', data: extractedData } : r));
 
+            const currentCount = requestCountRef.current + 1;
+            requestCountRef.current = currentCount;
+
+            if (currentCount > 0 && currentCount % PAUSE_AFTER_REQUESTS === 0) {
+                setIsPaused(true);
+                setPauseCountdown(PAUSE_DURATION_SECONDS);
+            }
+
         } catch (error) {
             console.error("Error extracting text:", error);
-            const errorMessage = (error instanceof Error) ? error.message : 'An unknown error occurred.';
+            const errorMessage = (error instanceof Error) ? error.message : 'Ocorreu um erro desconhecido.';
             setResults(prev => prev.map(r => r.id === itemToProcess.id ? { ...r, status: 'error', errorMessage } : r));
         }
     };
+
+    useEffect(() => {
+        if (!isPaused || pauseCountdown <= 0) {
+            if (isPaused) setIsPaused(false);
+            return;
+        }
+
+        const timerId = setTimeout(() => {
+            setPauseCountdown(prev => prev - 1);
+        }, 1000);
+
+        return () => clearTimeout(timerId);
+    }, [isPaused, pauseCountdown]);
     
     useEffect(() => {
+        if (isPaused) return;
+
         const currentlyLoading = results.filter(r => r.status === 'loading').length;
         const queuedItems = results.filter(r => r.status === 'queued');
 
@@ -122,7 +151,7 @@ const App: React.FC = () => {
             setIsProcessing(false);
         }
 
-    }, [results]);
+    }, [results, isPaused]);
 
 
     const handleFileSelect = async (files: FileList | null) => {
@@ -144,29 +173,32 @@ const App: React.FC = () => {
         const dataToExport = results
             .filter(r => r.status === 'done' && r.data)
             .map(r => ({
-                'File Name': r.fileName,
-                'Product Name': r.data!.productName,
-                'Reference (REF)': r.data!.refNumber,
-                'Lot Number (LOT)': r.data!.lotNumber,
-                'Expiration Date': r.data!.expirationDate,
+                'Nome do Arquivo': r.fileName,
+                'Nome do Produto': r.data!.productName,
+                'Referência (REF)': r.data!.refNumber,
+                'Número do Lote (LOT)': r.data!.lotNumber,
+                'Data de Validade': r.data!.expirationDate,
             }));
 
         if (dataToExport.length === 0) {
-            alert("No data available to export.");
+            alert("Nenhum dado disponível para exportar.");
             return;
         }
 
         const worksheet = XLSX.utils.json_to_sheet(dataToExport);
         const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Lab Supplies");
-        XLSX.writeFile(workbook, "LabSupplyData.xlsx");
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Suprimentos de Laboratório");
+        XLSX.writeFile(workbook, "DadosSuprimentosLab.xlsx");
     };
     
-    // --- Drag and Drop Handlers ---
+    const handleDeleteItem = (idToDelete: string) => {
+        setResults(prev => prev.filter(item => item.id !== idToDelete));
+    };
+
     const handleDragEvents = (e: React.DragEvent, isEntering: boolean) => {
         e.preventDefault();
         e.stopPropagation();
-        if (isProcessing) return;
+        if (isProcessing || isPaused) return;
         setIsDragging(isEntering);
     };
 
@@ -177,28 +209,32 @@ const App: React.FC = () => {
             handleFileSelect(files);
         }
     };
-
+    
+    const getDropZoneText = () => {
+        if (isPaused) return 'Pausado...';
+        if (isProcessing) return 'Processando imagens...';
+        if (isDragging) return 'Arraste as imagens aqui';
+        return <>Arraste e solte os arquivos ou <span>clique para procurar</span></>;
+    };
 
     return (
         <>
             <div className="container">
                 <header className="header">
-                    <h1>Lab Supply OCR & Exporter</h1>
-                    <p>Upload images of lab supply boxes to extract info and export to Excel.</p>
+                    <h1>Extrator e Exportador de Suprimentos de Laboratório</h1>
+                    <p>Envie imagens de caixas de suprimentos de laboratório para extrair informações e exportar para Excel.</p>
                 </header>
                 
                 <section className="controls">
                      <label 
                         htmlFor="file-upload" 
-                        className={`drop-zone ${isDragging ? 'drag-over' : ''} ${isProcessing ? 'disabled' : ''}`}
+                        className={`drop-zone ${isDragging ? 'drag-over' : ''} ${(isProcessing || isPaused) ? 'disabled' : ''}`}
                         onDragEnter={(e) => handleDragEvents(e, true)}
                         onDragLeave={(e) => handleDragEvents(e, false)}
                         onDragOver={(e) => handleDragEvents(e, true)}
                         onDrop={handleDrop}
                     >
-                        <p className="drop-zone-text">
-                           {isProcessing ? 'Processing images...' : isDragging ? 'Drop images here' : <>Drag & drop files or <span>click to browse</span></>}
-                        </p>
+                        <p className="drop-zone-text">{getDropZoneText()}</p>
                         <input 
                             id="file-upload" 
                             type="file" 
@@ -206,28 +242,35 @@ const App: React.FC = () => {
                             accept="image/*" 
                             className="file-input"
                             onChange={(e) => handleFileSelect(e.target.files)}
-                            disabled={isProcessing}
+                            disabled={isProcessing || isPaused}
                         />
                     </label>
                     <button 
                         onClick={handleExportToExcel} 
                         className="btn btn-primary"
-                        disabled={results.filter(r => r.status === 'done').length === 0 || isProcessing}
+                        disabled={results.filter(r => r.status === 'done').length === 0 || isProcessing || isPaused}
                     >
-                        Export to Excel
+                        Exportar para Excel
                     </button>
                 </section>
+                
+                {isPaused && (
+                    <div className="pause-banner">
+                        <p>Limite de requisições atingido. A fila continuará em <strong>{pauseCountdown}</strong> segundos.</p>
+                    </div>
+                )}
 
                 <section className="results-container">
                     {results.length > 0 ? (
                         <table className="results-table">
                             <thead>
                                 <tr>
-                                    <th>Image</th>
-                                    <th>Product Name</th>
+                                    <th>Imagem</th>
+                                    <th>Nome do Produto</th>
                                     <th>REF #</th>
-                                    <th>LOT #</th>
-                                    <th>Expires</th>
+                                    <th>LOTE #</th>
+                                    <th>Validade</th>
+                                    <th>Ações</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -238,15 +281,29 @@ const App: React.FC = () => {
                                                 <img src={item.imageSrc} alt={item.fileName} className="image-thumbnail" />
                                             </button>
                                         </td>
-                                        {item.status === 'queued' && <td colSpan={4}><div className="status-cell"><p className="queued-text">Queued for processing...</p></div></td>}
-                                        {item.status === 'loading' && <td colSpan={4}><div className="status-cell"><div className="spinner"></div><p>Processing...</p></div></td>}
-                                        {item.status === 'error' && <td colSpan={4}><div className="status-cell"><p className="error-text">Failed to extract: {item.errorMessage}</p></div></td>}
+                                        {item.status === 'queued' && <td colSpan={5}><div className="status-cell"><p className="queued-text">Na fila para processamento...</p></div></td>}
+                                        {item.status === 'loading' && <td colSpan={5}><div className="status-cell"><div className="spinner"></div><p>Processando...</p></div></td>}
+                                        {item.status === 'error' && (
+                                            <>
+                                                <td colSpan={4}><div className="status-cell error-cell"><p className="error-text">Falha na extração: {item.errorMessage}</p></div></td>
+                                                <td>
+                                                    <button onClick={() => handleDeleteItem(item.id)} className="btn-delete" title="Excluir item">
+                                                        &#128465;
+                                                    </button>
+                                                </td>
+                                            </>
+                                        )}
                                         {item.status === 'done' && item.data && (
                                             <>
-                                                <td>{item.data.productName || 'N/A'}</td>
-                                                <td>{item.data.refNumber || 'N/A'}</td>
-                                                <td>{item.data.lotNumber || 'N/A'}</td>
-                                                <td>{item.data.expirationDate || 'N/A'}</td>
+                                                <td>{item.data.productName || 'N/D'}</td>
+                                                <td>{item.data.refNumber || 'N/D'}</td>
+                                                <td>{item.data.lotNumber || 'N/D'}</td>
+                                                <td>{item.data.expirationDate || 'N/D'}</td>
+                                                <td>
+                                                    <button onClick={() => handleDeleteItem(item.id)} className="btn-delete" title="Excluir item">
+                                                        &#128465;
+                                                    </button>
+                                                </td>
                                             </>
                                         )}
                                     </tr>
@@ -255,7 +312,7 @@ const App: React.FC = () => {
                         </table>
                     ) : (
                         <div className="no-results">
-                            <p>Your processed images will appear here.</p>
+                            <p>Suas imagens processadas aparecerão aqui.</p>
                         </div>
                     )}
                 </section>

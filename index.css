@@ -129,6 +129,21 @@ body {
     cursor: not-allowed;
 }
 
+.pause-banner {
+    background-color: #fefce8;
+    color: #a16207;
+    border: 1px solid #fde047;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 2rem;
+    text-align: center;
+}
+
+.pause-banner p {
+    margin: 0;
+    font-weight: 500;
+}
+
 .results-container {
     margin-top: 2rem;
 }
@@ -136,13 +151,13 @@ body {
 .results-table {
     width: 100%;
     border-collapse: collapse;
-    text-align: left;
 }
 
 .results-table th, .results-table td {
     padding: 1rem;
     border-bottom: 1px solid var(--medium-gray);
     vertical-align: middle;
+    text-align: left;
 }
 
 .results-table th {
@@ -151,6 +166,13 @@ body {
     text-transform: uppercase;
     color: var(--dark-gray);
     background-color: var(--light-gray);
+}
+
+.results-table th:first-child,
+.results-table td:first-child,
+.results-table th:last-child,
+.results-table td:last-child {
+    text-align: center;
 }
 
 .results-table tr:last-child td {
@@ -168,6 +190,7 @@ body {
     cursor: pointer;
     border-radius: 8px;
     display: block;
+    margin: 0 auto;
 }
 
 .thumbnail-button:focus-visible {
@@ -189,6 +212,11 @@ body {
     align-items: center;
     justify-content: center;
     gap: 0.75rem;
+    height: 80px;
+}
+
+.error-cell {
+    justify-content: flex-start;
 }
 
 .queued-text {
@@ -199,7 +227,7 @@ body {
 
 .error-text {
     color: var(--danger-color);
-    font-style: italic;
+    font-weight: 500;
     font-size: 0.9rem;
 }
 
@@ -220,6 +248,35 @@ body {
     border-radius: 50%;
     animation: spin 1s linear infinite;
 }
+
+.btn-delete {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.5rem;
+    color: var(--dark-gray);
+    padding: 0.25rem;
+    line-height: 1;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s ease, background-color 0.2s ease;
+    margin: 0 auto;
+}
+
+.btn-delete:hover {
+    color: var(--danger-color);
+    background-color: #fee2e2;
+}
+
+.btn-delete:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
 
 /* Modal Styles */
 .modal-overlay {
