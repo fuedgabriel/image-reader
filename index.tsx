@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -16,11 +16,23 @@ interface ExtractedInfo {
 interface ResultItem {
     id: string;
     imageSrc: string;
+    file: File;
     fileName: string;
-    status: 'loading' | 'done' | 'error';
+    status: 'queued' | 'loading' | 'done' | 'error';
     data?: ExtractedInfo;
     errorMessage?: string;
 }
+
+// --- Component for Fullscreen Image Modal ---
+const ImageModal: React.FC<{ src: string, onClose: () => void }> = ({ src, onClose }) => (
+    <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <img src={src} alt="Fullscreen view" className="modal-image" />
+            <button onClick={onClose} className="modal-close-button" aria-label="Close image view">&times;</button>
+        </div>
+    </div>
+);
+
 
 // --- Gemini API Configuration ---
 const API_KEY = process.env.API_KEY;
@@ -41,6 +53,7 @@ const extractionSchema = {
     required: ["productName", "refNumber", "lotNumber", "expirationDate"],
 };
 
+const MAX_CONCURRENT_UPLOADS = 2;
 
 // --- Helper Functions ---
 const fileToBase64 = (file: File): Promise<string> => {
@@ -57,9 +70,11 @@ const App: React.FC = () => {
     const [results, setResults] = useState<ResultItem[]>([]);
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
     const [isDragging, setIsDragging] = useState<boolean>(false);
+    const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
-    const extractTextFromImage = async (file: File, id: string) => {
+    const extractTextFromImage = async (itemToProcess: ResultItem) => {
         try {
+            const { file, id } = itemToProcess;
             const base64Data = await fileToBase64(file);
             const response = await ai.models.generateContent({
                 model: model,
@@ -81,9 +96,34 @@ const App: React.FC = () => {
         } catch (error) {
             console.error("Error extracting text:", error);
             const errorMessage = (error instanceof Error) ? error.message : 'An unknown error occurred.';
-            setResults(prev => prev.map(r => r.id === id ? { ...r, status: 'error', errorMessage } : r));
+            setResults(prev => prev.map(r => r.id === itemToProcess.id ? { ...r, status: 'error', errorMessage } : r));
         }
     };
+    
+    useEffect(() => {
+        const currentlyLoading = results.filter(r => r.status === 'loading').length;
+        const queuedItems = results.filter(r => r.status === 'queued');
+
+        if (currentlyLoading < MAX_CONCURRENT_UPLOADS && queuedItems.length > 0) {
+            const itemsToProcess = queuedItems.slice(0, MAX_CONCURRENT_UPLOADS - currentlyLoading);
+            
+            setResults(prev => prev.map(r => {
+                if (itemsToProcess.some(item => item.id === r.id)) {
+                    return { ...r, status: 'loading' };
+                }
+                return r;
+            }));
+
+            itemsToProcess.forEach(extractTextFromImage);
+        }
+        
+        const isStillProcessing = results.some(r => r.status === 'loading' || r.status === 'queued');
+        if (!isStillProcessing && isProcessing) {
+            setIsProcessing(false);
+        }
+
+    }, [results]);
+
 
     const handleFileSelect = async (files: FileList | null) => {
         if (!files || files.length === 0) return;
@@ -93,20 +133,11 @@ const App: React.FC = () => {
             id: self.crypto.randomUUID(),
             imageSrc: URL.createObjectURL(file),
             fileName: file.name,
-            status: 'loading',
+            file,
+            status: 'queued',
         }));
 
         setResults(prev => [...prev, ...newItems]);
-        
-        await Promise.all(newItems.map(item => {
-            const file = Array.from(files).find(f => f.name === item.fileName);
-            if (file) {
-                return extractTextFromImage(file, item.id);
-            }
-            return Promise.resolve();
-        }));
-
-        setIsProcessing(false);
     };
 
     const handleExportToExcel = () => {
@@ -135,6 +166,7 @@ const App: React.FC = () => {
     const handleDragEvents = (e: React.DragEvent, isEntering: boolean) => {
         e.preventDefault();
         e.stopPropagation();
+        if (isProcessing) return;
         setIsDragging(isEntering);
     };
 
@@ -148,80 +180,88 @@ const App: React.FC = () => {
 
 
     return (
-        <div className="container">
-            <header className="header">
-                <h1>Lab Supply OCR & Exporter</h1>
-                <p>Upload images of lab supply boxes to extract info and export to Excel.</p>
-            </header>
-            
-            <section className="controls">
-                 <label 
-                    htmlFor="file-upload" 
-                    className={`drop-zone ${isDragging ? 'drag-over' : ''}`}
-                    onDragEnter={(e) => handleDragEvents(e, true)}
-                    onDragLeave={(e) => handleDragEvents(e, false)}
-                    onDragOver={(e) => handleDragEvents(e, true)}
-                    onDrop={handleDrop}
-                >
-                    <p className="drop-zone-text">
-                       {isDragging ? 'Drop images here' : <>Drag & drop files or <span>click to browse</span></>}
-                    </p>
-                    <input 
-                        id="file-upload" 
-                        type="file" 
-                        multiple 
-                        accept="image/*" 
-                        className="file-input"
-                        onChange={(e) => handleFileSelect(e.target.files)}
-                        disabled={isProcessing}
-                    />
-                </label>
-                <button 
-                    onClick={handleExportToExcel} 
-                    className="btn btn-primary"
-                    disabled={results.filter(r => r.status === 'done').length === 0 || isProcessing}
-                >
-                    Export to Excel
-                </button>
-            </section>
+        <>
+            <div className="container">
+                <header className="header">
+                    <h1>Lab Supply OCR & Exporter</h1>
+                    <p>Upload images of lab supply boxes to extract info and export to Excel.</p>
+                </header>
+                
+                <section className="controls">
+                     <label 
+                        htmlFor="file-upload" 
+                        className={`drop-zone ${isDragging ? 'drag-over' : ''} ${isProcessing ? 'disabled' : ''}`}
+                        onDragEnter={(e) => handleDragEvents(e, true)}
+                        onDragLeave={(e) => handleDragEvents(e, false)}
+                        onDragOver={(e) => handleDragEvents(e, true)}
+                        onDrop={handleDrop}
+                    >
+                        <p className="drop-zone-text">
+                           {isProcessing ? 'Processing images...' : isDragging ? 'Drop images here' : <>Drag & drop files or <span>click to browse</span></>}
+                        </p>
+                        <input 
+                            id="file-upload" 
+                            type="file" 
+                            multiple 
+                            accept="image/*" 
+                            className="file-input"
+                            onChange={(e) => handleFileSelect(e.target.files)}
+                            disabled={isProcessing}
+                        />
+                    </label>
+                    <button 
+                        onClick={handleExportToExcel} 
+                        className="btn btn-primary"
+                        disabled={results.filter(r => r.status === 'done').length === 0 || isProcessing}
+                    >
+                        Export to Excel
+                    </button>
+                </section>
 
-            <section className="results-container">
-                {results.length > 0 ? (
-                    <table className="results-table">
-                        <thead>
-                            <tr>
-                                <th>Image</th>
-                                <th>Product Name</th>
-                                <th>REF #</th>
-                                <th>LOT #</th>
-                                <th>Expires</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {results.map(item => (
-                                <tr key={item.id}>
-                                    <td><img src={item.imageSrc} alt={item.fileName} className="image-thumbnail" /></td>
-                                    {item.status === 'loading' && <td colSpan={4}><div className="status-cell"><div className="spinner"></div></div></td>}
-                                    {item.status === 'error' && <td colSpan={4}><div className="status-cell"><p className="error-text">Failed to extract: {item.errorMessage}</p></div></td>}
-                                    {item.status === 'done' && item.data && (
-                                        <>
-                                            <td>{item.data.productName || 'N/A'}</td>
-                                            <td>{item.data.refNumber || 'N/A'}</td>
-                                            <td>{item.data.lotNumber || 'N/A'}</td>
-                                            <td>{item.data.expirationDate || 'N/A'}</td>
-                                        </>
-                                    )}
+                <section className="results-container">
+                    {results.length > 0 ? (
+                        <table className="results-table">
+                            <thead>
+                                <tr>
+                                    <th>Image</th>
+                                    <th>Product Name</th>
+                                    <th>REF #</th>
+                                    <th>LOT #</th>
+                                    <th>Expires</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                ) : (
-                    <div className="no-results">
-                        <p>Your processed images will appear here.</p>
-                    </div>
-                )}
-            </section>
-        </div>
+                            </thead>
+                            <tbody>
+                                {results.map(item => (
+                                    <tr key={item.id}>
+                                        <td>
+                                            <button className="thumbnail-button" onClick={() => setFullscreenImage(item.imageSrc)}>
+                                                <img src={item.imageSrc} alt={item.fileName} className="image-thumbnail" />
+                                            </button>
+                                        </td>
+                                        {item.status === 'queued' && <td colSpan={4}><div className="status-cell"><p className="queued-text">Queued for processing...</p></div></td>}
+                                        {item.status === 'loading' && <td colSpan={4}><div className="status-cell"><div className="spinner"></div><p>Processing...</p></div></td>}
+                                        {item.status === 'error' && <td colSpan={4}><div className="status-cell"><p className="error-text">Failed to extract: {item.errorMessage}</p></div></td>}
+                                        {item.status === 'done' && item.data && (
+                                            <>
+                                                <td>{item.data.productName || 'N/A'}</td>
+                                                <td>{item.data.refNumber || 'N/A'}</td>
+                                                <td>{item.data.lotNumber || 'N/A'}</td>
+                                                <td>{item.data.expirationDate || 'N/A'}</td>
+                                            </>
+                                        )}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    ) : (
+                        <div className="no-results">
+                            <p>Your processed images will appear here.</p>
+                        </div>
+                    )}
+                </section>
+            </div>
+            {fullscreenImage && <ImageModal src={fullscreenImage} onClose={() => setFullscreenImage(null)} />}
+        </>
     );
 };
 
